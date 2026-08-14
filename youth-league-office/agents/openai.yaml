@@ -1,0 +1,4 @@
+interface:
+  display_name: "团委办公室"
+  short_description: "改写学生通知并统筹活动、证明、评优、会务与规范归档"
+  default_prompt: "使用 $youth-league-office 把上级要求改成学生可执行的通知，或按审批链、模板与隐私规则办理团委办公室任务。"
