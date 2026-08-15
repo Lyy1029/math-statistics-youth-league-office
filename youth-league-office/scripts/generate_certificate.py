@@ -46,7 +46,6 @@ DCTERMS_NS = "http://purl.org/dc/terms/"
 CUSTOM_NS = "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"
 VT_NS = "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"
 APP_NS = "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"
-FALLBACK_CJK_FONT = "Songti SC"
 CONTENT_TYPES_NS = "http://schemas.openxmlformats.org/package/2006/content-types"
 
 W = "{" + W_NS + "}"
@@ -57,6 +56,10 @@ PR = "{" + PKG_REL_NS + "}"
 SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 ASSET_DIR = SKILL_DIR / "assets"
+BUNDLED_FONT_DIR = ASSET_DIR / "fonts"
+BUNDLED_CJK_FONT_PATH = BUNDLED_FONT_DIR / "NotoSerifSC-Regular.otf"
+BUNDLED_CJK_FONT_SIZE = 11_625_800
+FALLBACK_CJK_FONT = "Noto Serif SC"
 DEFAULT_TEMPLATES = {
     "activity": ASSET_DIR / "activity-certificate-template.docx",
     "outstanding": ASSET_DIR / "outstanding-contribution-template.docx",
@@ -133,6 +136,21 @@ class GenerationResult:
 
 def qn(local_name: str) -> str:
     return W + local_name
+
+
+def _validate_bundled_font_asset() -> Path:
+    """Fail closed instead of allowing environment-dependent PDF font substitution."""
+    try:
+        size = BUNDLED_CJK_FONT_PATH.stat().st_size
+    except OSError as exc:
+        raise TemplateError(
+            "缺少随 Skill 打包的 Noto Serif SC 字体；为避免 PDF 字体替换，已停止制证。"
+        ) from exc
+    if size != BUNDLED_CJK_FONT_SIZE:
+        raise TemplateError(
+            "随 Skill 打包的 Noto Serif SC 字体大小异常；为避免 PDF 字体不一致，已停止制证。"
+        )
+    return BUNDLED_CJK_FONT_PATH
 
 
 def _safe_text(value: object) -> str:
@@ -726,15 +744,7 @@ def set_paragraph_text(paragraph: ET.Element, text: str) -> None:
     if run_properties is None:
         run_properties = ET.Element(qn("rPr"))
         run.insert(0, run_properties)
-    _set_child(
-        run_properties,
-        "rFonts",
-        ascii=FALLBACK_CJK_FONT,
-        hAnsi=FALLBACK_CJK_FONT,
-        eastAsia=FALLBACK_CJK_FONT,
-        cs=FALLBACK_CJK_FONT,
-        hint="eastAsia",
-    )
+    _set_portable_run_font(run_properties)
     text_node = ET.SubElement(run, qn("t"))
     if text[:1].isspace() or text[-1:].isspace():
         text_node.set("{" + XML_NS + "}space", "preserve")
@@ -762,6 +772,21 @@ def _set_child(parent: ET.Element, local_name: str, **attributes: str) -> ET.Ele
     return child
 
 
+def _set_portable_run_font(run_properties: ET.Element) -> None:
+    """Set every script slot and remove theme aliases that LibreOffice may prioritize."""
+    fonts = _set_child(
+        run_properties,
+        "rFonts",
+        ascii=FALLBACK_CJK_FONT,
+        hAnsi=FALLBACK_CJK_FONT,
+        eastAsia=FALLBACK_CJK_FONT,
+        cs=FALLBACK_CJK_FONT,
+        hint="eastAsia",
+    )
+    for attribute in ("asciiTheme", "hAnsiTheme", "eastAsiaTheme", "cstheme"):
+        fonts.attrib.pop(qn(attribute), None)
+
+
 def _apply_cjk_font_fallback(root: ET.Element) -> None:
     """Replace unavailable/template-subset CJK fonts while preserving other styling."""
     for run in root.iter(qn("r")):
@@ -772,15 +797,7 @@ def _apply_cjk_font_fallback(root: ET.Element) -> None:
         if run_properties is None:
             run_properties = ET.Element(qn("rPr"))
             run.insert(0, run_properties)
-        _set_child(
-            run_properties,
-            "rFonts",
-            ascii=FALLBACK_CJK_FONT,
-            hAnsi=FALLBACK_CJK_FONT,
-            eastAsia=FALLBACK_CJK_FONT,
-            cs=FALLBACK_CJK_FONT,
-            hint="eastAsia",
-        )
+        _set_portable_run_font(run_properties)
 
 
 def _apply_global_document_font(root: ET.Element) -> None:
@@ -797,15 +814,7 @@ def _apply_global_document_font(root: ET.Element) -> None:
         if run_properties is None:
             run_properties = ET.Element(qn("rPr"))
             run.insert(0, run_properties)
-        _set_child(
-            run_properties,
-            "rFonts",
-            ascii=FALLBACK_CJK_FONT,
-            hAnsi=FALLBACK_CJK_FONT,
-            eastAsia=FALLBACK_CJK_FONT,
-            cs=FALLBACK_CJK_FONT,
-            hint="eastAsia",
-        )
+        _set_portable_run_font(run_properties)
 
 
 def _display_name(value: str) -> str:
@@ -883,15 +892,7 @@ def make_borderless_name_table(
             _set_child(paragraph_properties, "spacing", before="0", after="0", line="300", lineRule="exact")
             run = ET.SubElement(paragraph, qn("r"))
             run_properties = ET.SubElement(run, qn("rPr"))
-            _set_child(
-                run_properties,
-                "rFonts",
-                ascii=FALLBACK_CJK_FONT,
-                hAnsi=FALLBACK_CJK_FONT,
-                eastAsia=FALLBACK_CJK_FONT,
-                cs=FALLBACK_CJK_FONT,
-                hint="eastAsia",
-            )
+            _set_portable_run_font(run_properties)
             _set_child(run_properties, "sz", val="21")
             _set_child(run_properties, "szCs", val="21")
             text_node = ET.SubElement(run, qn("t"))
@@ -957,10 +958,12 @@ def _paragraph_line_height(paragraph: ET.Element, fallback: int) -> int:
 def _estimated_paragraph_lines(paragraph: ET.Element, text: str) -> int:
     """Estimate wrapped lines well enough to keep the floating names below the prose.
 
-    The honor-certificate template uses a fixed-width frame and Songti text.
-    Full-width characters occupy roughly one font em and Latin/digits half an
-    em in both Word and LibreOffice. The estimate only controls vertical
-    placement; final delivery still requires one visual check of the PDF.
+    The honor-certificate template uses a fixed-width frame and Noto Serif SC.
+    LibreOffice's CJK line breaking needs about ten percent more horizontal
+    room than the nominal Word font em. The conservative allowance keeps the
+    floating name table one full line below wrapped prose. The estimate only
+    controls vertical placement; final delivery still requires one visual
+    check of the PDF.
     """
     properties = paragraph.find(qn("pPr"))
     frame_width = _frame_width(paragraph, 8464)
@@ -974,7 +977,7 @@ def _estimated_paragraph_lines(paragraph: ET.Element, text: str) -> int:
     font_size = run_properties.find(qn("sz")) if run_properties is not None else None
     try:
         # w:sz is measured in half-points; one point is 20 twips.
-        full_width = int(font_size.attrib.get(qn("val"), "28")) * 10 if font_size is not None else 280
+        full_width = int(font_size.attrib.get(qn("val"), "28")) * 11 if font_size is not None else 308
     except ValueError:
         full_width = 280
     half_width = max(1, full_width // 2)
@@ -1460,24 +1463,19 @@ def _find_soffice() -> Path | None:
 
 
 def convert_to_pdf(docx_path: Path, pdf_path: Path, soffice: Path) -> None:
+    _validate_bundled_font_asset()
     with (
         tempfile.TemporaryDirectory(prefix="certificate-pdf-") as output_dir,
         tempfile.TemporaryDirectory(prefix="certificate-lo-profile-") as profile_dir,
         tempfile.TemporaryDirectory(prefix="certificate-fontconfig-") as fontconfig_dir,
     ):
         fontconfig_root = ET.Element("fontconfig")
-        font_directories = [
-            Path("/System/Library/Fonts"),
-            Path("/System/Library/Fonts/Supplemental"),
-            Path("/Library/Fonts"),
-            Path.home() / "Library" / "Fonts",
-            Path("/usr/share/fonts"),
-            Path("/usr/local/share/fonts"),
-        ]
-        for directory in font_directories:
-            if directory.is_dir():
-                node = ET.SubElement(fontconfig_root, "dir")
-                node.text = str(directory)
+        # The document XML already assigns every visible run to the bundled
+        # family.  Avoid scanning environment-specific system font trees: this
+        # both shortens first-use conversion and removes another substitution
+        # surface on other Agents.
+        node = ET.SubElement(fontconfig_root, "dir")
+        node.text = str(BUNDLED_FONT_DIR)
         cache_dir = Path(fontconfig_dir) / "cache"
         cache_dir.mkdir()
         cache_node = ET.SubElement(fontconfig_root, "cachedir")
@@ -1512,6 +1510,16 @@ def convert_to_pdf(docx_path: Path, pdf_path: Path, soffice: Path) -> None:
         generated = Path(output_dir) / (docx_path.stem + ".pdf")
         if completed.returncode != 0 or not generated.is_file():
             raise CertificateError("LibreOffice 未能导出 PDF；DOCX 已保留，请手动导出。")
+        pdf_bytes = generated.read_bytes()
+        embedded_families = {
+            name.split(b"+")[-1]
+            for name in re.findall(rb"/FontName\s*/([^\s/<>\[\]()]+)", pdf_bytes)
+        }
+        if not embedded_families or embedded_families != {b"NotoSerifSC-Regular"}:
+            raise CertificateError(
+                "PDF 未完整嵌入随 Skill 打包的 Noto Serif SC，或检测到替代字体；"
+                "DOCX 已保留，PDF 未交付。"
+            )
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
         os.replace(generated, pdf_path)
 

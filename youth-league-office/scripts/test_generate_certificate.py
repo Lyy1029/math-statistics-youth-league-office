@@ -12,6 +12,8 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
+from unittest import mock
 from xml.etree import ElementTree as ET
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -25,6 +27,28 @@ def docx_text(path: Path) -> str:
     with zipfile.ZipFile(path) as package:
         root = ET.fromstring(package.read("word/document.xml"))
     return "".join(node.text or "" for node in root.iter(W + "t"))
+
+
+def docx_font_families(path: Path) -> set[str]:
+    with zipfile.ZipFile(path) as package:
+        root = ET.fromstring(package.read("word/document.xml"))
+    families: set[str] = set()
+    for run in root.iter(W + "r"):
+        if not any((node.text or "") for node in run.iter(W + "t")):
+            continue
+        properties = run.find(W + "rPr")
+        fonts = properties.find(W + "rFonts") if properties is not None else None
+        if fonts is None:
+            continue
+        for slot in ("ascii", "hAnsi", "eastAsia", "cs"):
+            value = fonts.attrib.get(W + slot)
+            if value:
+                families.add(value)
+        for slot in ("asciiTheme", "hAnsiTheme", "eastAsiaTheme", "cstheme"):
+            value = fonts.attrib.get(W + slot)
+            if value:
+                families.add("theme:" + value)
+    return families
 
 
 def paragraph_indent_attributes(path: Path, needle: str) -> dict[str, str]:
@@ -122,6 +146,30 @@ class CertificateGeneratorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temp.cleanup()
 
+    def test_bundled_font_is_valid_and_pdf_conversion_prefers_it(self) -> None:
+        font_path = cert._validate_bundled_font_asset()
+        self.assertEqual(font_path, cert.BUNDLED_CJK_FONT_PATH)
+        self.assertEqual(font_path.stat().st_size, cert.BUNDLED_CJK_FONT_SIZE)
+
+        docx = self.work / "font-check.docx"
+        docx.write_bytes(b"synthetic docx placeholder")
+        pdf = self.work / "font-check.pdf"
+
+        def fake_run(command, **kwargs):
+            config = Path(kwargs["env"]["FONTCONFIG_FILE"])
+            root = ET.fromstring(config.read_bytes())
+            directories = [node.text for node in root.findall("dir")]
+            self.assertEqual(directories[0], str(cert.BUNDLED_FONT_DIR))
+            output_dir = Path(command[command.index("--outdir") + 1])
+            (output_dir / "font-check.pdf").write_bytes(
+                b"%PDF-1.7 /FontName /ABCDEF+NotoSerifSC-Regular synthetic"
+            )
+            return SimpleNamespace(returncode=0)
+
+        with mock.patch.object(cert.subprocess, "run", side_effect=fake_run):
+            cert.convert_to_pdf(docx, pdf, Path("/synthetic/soffice"))
+        self.assertTrue(pdf.is_file())
+
     def test_activity_txt_sorting_and_identity_only(self) -> None:
         roster = self.work / "approved.txt"
         roster.write_text("姓名\n甲乙丙\n丁戊\n欧阳甲乙\n己庚辛\n", encoding="utf-8")
@@ -136,6 +184,7 @@ class CertificateGeneratorTests(unittest.TestCase):
             make_pdf=False,
         )
         text = docx_text(result.docx_path)
+        self.assertEqual(docx_font_families(result.docx_path), {cert.FALLBACK_CJK_FONT})
         self.assertEqual(result.columns, 8)
         self.assertNotIn("活动活动", text)
         self.assertNotRegex(text, cert.SCORE_LANGUAGE_RE)
@@ -183,7 +232,7 @@ class CertificateGeneratorTests(unittest.TestCase):
         layout = outstanding_name_layout(result.docx_path)
         self.assertEqual(layout["blank_lines"], 1)
 
-        long_activity = "示范青春歌会暨共青团表彰大会"
+        long_activity = "示范青春歌会暨共青团表彰大会优秀志愿者交流展示与总结活动成果分享会"
         long_roster = self.work / "approved-long.csv"
         with long_roster.open("w", encoding="utf-8-sig", newline="") as handle:
             writer = csv.writer(handle)
