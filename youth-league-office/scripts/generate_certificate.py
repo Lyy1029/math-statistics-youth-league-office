@@ -95,6 +95,7 @@ FORBIDDEN_INTERNAL_HEADER_TERMS = {
 }
 APPROVED_STATUS_VALUES = {"已批准", "批准", "通过", "是", "yes", "approved"}
 MAX_NAME_ROWS = 12
+ACTIVITY_SPACER_LINE_BUDGET = 8
 OUTSTANDING_REFERENCE_TEXT_LINES = 2
 OUTSTANDING_BASE_TABLE_Y_OFFSET_TWIPS = 1440
 OUTSTANDING_FALLBACK_LINE_HEIGHT_TWIPS = 500
@@ -1049,10 +1050,11 @@ def _adjust_activity_spacer(body: ET.Element, table_index: int, name_rows: int) 
         blanks.append(child)
     if not blanks:
         return
-    # The original template reserves fourteen text lines between the marker and
-    # the closing paragraph.  Reduce blank paragraphs as the name grid grows so
-    # the issuer/date remain near the reference position on a one-page document.
-    keep = max(1, 14 - name_rows)
+    # Keep enough visual separation without consuming the page's entire lower
+    # text area.  A larger legacy budget fit in Word but pushed the issuer/date
+    # onto page 2 in LibreOffice 24.x.  Eight total grid/spacer lines leaves a
+    # conservative cross-renderer margin while preserving the reference layout.
+    keep = max(1, ACTIVITY_SPACER_LINE_BUDGET - name_rows)
     for paragraph in blanks[keep:]:
         body.remove(paragraph)
 

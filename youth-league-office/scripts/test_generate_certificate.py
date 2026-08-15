@@ -125,6 +125,24 @@ def outstanding_name_layout(path: Path) -> dict[str, int]:
     }
 
 
+def activity_spacer_lines(path: Path) -> int:
+    with zipfile.ZipFile(path) as package:
+        root = ET.fromstring(package.read("word/document.xml"))
+    body = root.find(".//" + W + "body")
+    if body is None:
+        raise AssertionError("文档缺少正文。")
+    children = list(body)
+    table_index = next(index for index, child in enumerate(children) if child.tag == W + "tbl")
+    blanks = 0
+    for child in children[table_index + 1 :]:
+        if child.tag != W + "p" or "".join(
+            node.text or "" for node in child.iter(W + "t")
+        ).strip():
+            break
+        blanks += 1
+    return blanks
+
+
 def build_synthetic_xlsx(path: Path, rows: list[list[str]]) -> None:
     cert.create_approved_list_template(path)
     with zipfile.ZipFile(path) as package:
@@ -201,6 +219,31 @@ class CertificateGeneratorTests(unittest.TestCase):
         self.assertEqual(geometry["grid_widths"][0], geometry["cell_widths"][0])
         self.assertEqual(geometry["table_width"], geometry["grid_widths"][0] * 8)
         self.assertEqual(set(geometry["cell_alignments"]), {"center"})
+        self.assertEqual(
+            activity_spacer_lines(result.docx_path),
+            cert.ACTIVITY_SPACER_LINE_BUDGET - result.rows,
+        )
+
+    def test_activity_spacer_keeps_large_roster_within_budget(self) -> None:
+        roster = self.work / "approved-large.txt"
+        roster.write_text(
+            "姓名\n"
+            + "\n".join("合成人员" + chr(0x4E00 + index) for index in range(80))
+            + "\n",
+            encoding="utf-8",
+        )
+        result = cert.generate_certificate(
+            kind="activity",
+            names_path=roster,
+            academic_year="2025-2026",
+            activity_name="志愿服务活动",
+            role="参与人员",
+            issue_date="2026-06-30",
+            output_dir=self.work,
+            make_pdf=False,
+        )
+        self.assertEqual(result.rows, 10)
+        self.assertEqual(activity_spacer_lines(result.docx_path), 1)
 
     def test_outstanding_csv_allowed_headers(self) -> None:
         roster = self.work / "approved.csv"
