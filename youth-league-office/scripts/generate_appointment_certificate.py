@@ -72,6 +72,9 @@ from generate_certificate import (
 
 STAFF_TEMPLATE = ASSET_DIR / "staff-appointment-template.docx"
 LEADER_BACKGROUND = ASSET_DIR / "leader-appointment-background.png"
+LEADER_FONT_PATH = BUNDLED_FONT_DIR / "SourceHanSerifSC-SemiBold.otf"
+LEADER_FONT_SIZE = 24_700_532
+LEADER_BODY_LETTER_SPACING = 1.357
 DEFAULT_LIST_TEMPLATE = ASSET_DIR / "appointment-approved-list-template.xlsx"
 MAX_FIELD_LENGTH = 80
 PDF_BATCH_SIZE = 60
@@ -416,9 +419,13 @@ def _leader_role(record: AppointmentRecord) -> str:
 
 
 def _leader_role_font_size(role: str) -> float:
-    # The underlined role field runs to the comma at about x=396.  Keep the
-    # reference size for ordinary roles and shrink only unusually long labels.
-    size = min(17.474, 270.0 / max(len(role), 1))
+    # Leave the reference gap before the comma at x=281.627.  Include the
+    # original 1.357 pt tracking when fitting longer organization/role labels.
+    count = max(len(role), 1)
+    size = min(
+        17.474,
+        (158.0 - LEADER_BODY_LETTER_SPACING * max(count - 1, 0)) / count,
+    )
     if size < 11.5:
         raise InputValidationError(
             f"部长及以上职务文字过长，位于行 {record.source_row}；请简化组织/部门/职务。"
@@ -427,12 +434,66 @@ def _leader_role_font_size(role: str) -> float:
 
 
 def _leader_name_font_size(name: str, row: int) -> float:
-    size = min(17.474, 54.0 / max(len(name), 1))
+    count = max(len(name), 1)
+    size = min(
+        17.474,
+        (56.0 - LEADER_BODY_LETTER_SPACING * max(count - 1, 0)) / count,
+    )
     if size < 12.0:
         raise InputValidationError(
             f"部长及以上姓名无法放入原稿姓名栏，位于行 {row}。"
         )
     return size
+
+
+def _validate_leader_font_asset() -> Path:
+    try:
+        size = LEADER_FONT_PATH.stat().st_size
+    except OSError as exc:
+        raise TemplateError(
+            "缺少原 PDF 同款的 Source Han Serif SC SemiBold 字体；已停止制证。"
+        ) from exc
+    if size != LEADER_FONT_SIZE:
+        raise TemplateError(
+            "Source Han Serif SC SemiBold 字体资产大小异常；已停止制证。"
+        )
+    return LEADER_FONT_PATH
+
+
+def _leader_glyph_width(char: str, font_size: float) -> float:
+    """Return Source Han Serif SC glyph widths used by the reference PDF."""
+    if char == " ":
+        return font_size * 0.254
+    if char.isascii() and char.isdigit():
+        return font_size * 0.564
+    if char.isascii():
+        return font_size * 0.6
+    return font_size
+
+
+def _positioned_svg_text(
+    text: str,
+    *,
+    x: float,
+    y: float,
+    font_size: float,
+    tracking: float,
+    anchor_center: float | None = None,
+) -> str:
+    widths = [_leader_glyph_width(char, font_size) for char in text]
+    total_width = sum(widths) + tracking * max(len(text) - 1, 0)
+    cursor = anchor_center - total_width / 2 if anchor_center is not None else x
+    nodes: list[str] = []
+    for index, (char, width) in enumerate(zip(text, widths)):
+        if char != " ":
+            nodes.append(
+                f'    <text x="{cursor:.3f}" y="{y:.3f}" '
+                f'font-size="{font_size:.3f}">{escape(char)}</text>'
+            )
+        cursor += width
+        if index < len(text) - 1:
+            cursor += tracking
+    return "\n".join(nodes)
 
 
 def build_leader_svg(record: AppointmentRecord, issue_date: str, output: Path) -> None:
@@ -443,26 +504,49 @@ def build_leader_svg(record: AppointmentRecord, issue_date: str, output: Path) -
     role = _leader_role(record)
     role_size = _leader_role_font_size(role)
     name_size = _leader_name_font_size(record.name, record.source_row)
-    values = {
-        "name": escape(record.name),
-        "role": escape(role),
-        "start": escape(record.term_start),
-        "end": escape(record.term_end),
-        "date": escape(_leader_issue_date(issue_date)),
-    }
+    first_label = _positioned_svg_text(
+        "兹聘用", x=90.387, y=342.270, font_size=17.474,
+        tracking=LEADER_BODY_LETTER_SPACING,
+    )
+    name_label = _positioned_svg_text(
+        record.name, x=166.266, y=342.270, font_size=name_size,
+        tracking=LEADER_BODY_LETTER_SPACING,
+    )
+    duty_label = _positioned_svg_text(
+        "担任北京工商大学数学与统计学院",
+        x=243.653, y=342.295, font_size=17.474,
+        tracking=LEADER_BODY_LETTER_SPACING,
+    )
+    role_label = _positioned_svg_text(
+        role, x=115.556, y=380.914, font_size=role_size,
+        tracking=LEADER_BODY_LETTER_SPACING,
+    )
+    term_label = _positioned_svg_text(
+        f"，聘期一年，自{record.term_start}至",
+        x=281.627, y=383.017, font_size=17.474,
+        tracking=LEADER_BODY_LETTER_SPACING,
+    )
+    end_label = _positioned_svg_text(
+        f"{record.term_end}止。", x=66.383, y=436.563, font_size=17.474,
+        tracking=LEADER_BODY_LETTER_SPACING,
+    )
+    date_label = _positioned_svg_text(
+        _leader_issue_date(issue_date), x=0, y=675.729, font_size=14.585,
+        tracking=1.632, anchor_center=448.855,
+    )
     svg = f'''<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"
      width="595.5pt" height="842.25pt" viewBox="0 0 595.5 842.25">
   <image x="0" y="0" width="595.5" height="842.25" preserveAspectRatio="none"
          xlink:href="data:image/png;base64,{background}"/>
-  <g font-family="Noto Serif SC" fill="#000000">
-    <text x="90.387" y="342.270" font-size="17.474">兹聘用</text>
-    <text x="166.266" y="342.270" font-size="{name_size:.3f}">{values['name']}</text>
-    <text x="220.446" y="342.295" font-size="17.474">担任北京工商大学数学与统计学院</text>
-    <text x="115.556" y="380.914" font-size="{role_size:.3f}">{values['role']}</text>
-    <text x="281.627" y="383.017" font-size="17.474">，聘期一年，自{values['start']}至</text>
-    <text x="66.383" y="436.563" font-size="17.474">{values['end']}止。</text>
-    <text x="448.855" y="675.729" text-anchor="middle" font-size="14.585" letter-spacing="2">{values['date']}</text>
+  <g font-family="Source Han Serif SC" font-weight="600" fill="#000000">
+{first_label}
+{name_label}
+{duty_label}
+{role_label}
+{term_label}
+{end_label}
+{date_label}
   </g>
 </svg>
 '''
@@ -471,9 +555,8 @@ def build_leader_svg(record: AppointmentRecord, issue_date: str, output: Path) -
 
 def _fontconfig(temp_dir: Path) -> tuple[Path, dict[str, str]]:
     root = ET.Element("fontconfig")
-    # Every visible run is normalized to the bundled font.  Limiting Fontconfig
-    # to this directory avoids a slow first-use scan of an Agent's system fonts
-    # and makes substitution impossible by construction.
+    # Every visible run names one of the bundled fonts.  Limiting Fontconfig to
+    # this directory avoids system-font scans and environment substitutions.
     node = ET.SubElement(root, "dir")
     node.text = str(BUNDLED_FONT_DIR)
     cache = temp_dir / "cache"
@@ -496,6 +579,8 @@ def convert_sources_to_pdf(
     pairs: Sequence[tuple[Path, Path]], soffice: Path
 ) -> list[Path]:
     _validate_bundled_font_asset()
+    if any(source.suffix.casefold() == ".svg" for source, _ in pairs):
+        _validate_leader_font_asset()
     with (
         tempfile.TemporaryDirectory(prefix="appointment-pdf-") as pdf_dir,
         tempfile.TemporaryDirectory(prefix="appointment-lo-profile-") as profile_dir,
@@ -537,7 +622,12 @@ def convert_sources_to_pdf(
                 name.split(b"+")[-1]
                 for name in re.findall(rb"/FontName\s*/([^\s/<>\[\]()]+)", pdf_bytes)
             }
-            if not families or families != {b"NotoSerifSC-Regular"}:
+            expected = (
+                {b"SourceHanSerifSC-SemiBold"}
+                if source.suffix.casefold() == ".svg"
+                else {b"NotoSerifSC-Regular"}
+            )
+            if not families or families != expected:
                 raise CertificateError(
                     "任职证明 PDF 检测到字体替换；PDF 未交付。"
                 )
@@ -740,7 +830,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         print(f"输出目录：{result.output_dir.resolve()}")
         if result.pdf_count:
-            print("日志未显示姓名；PDF 已检查嵌入 Noto Serif SC 且无替代字体。")
+            print("日志未显示姓名；PDF 已检查嵌入对应内置字体且无替代字体。")
         else:
             print("日志未显示姓名；本次仅生成干事 DOCX，未执行 PDF 检查。")
         return 0

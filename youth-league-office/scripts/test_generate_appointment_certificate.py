@@ -96,7 +96,7 @@ class AppointmentCertificateTests(unittest.TestCase):
     def test_leader_svg_uses_reference_background_and_expected_text(self) -> None:
         record = appointment.AppointmentRecord(
             source_row=2,
-            name="王五",
+            name="合成甲",
             class_name="",
             student_id="",
             organization="团委",
@@ -112,9 +112,12 @@ class AppointmentCertificateTests(unittest.TestCase):
             payload = output.read_text(encoding="utf-8")
         self.assertIn("leader-appointment-background", appointment.LEADER_BACKGROUND.name)
         self.assertIn("data:image/png;base64,", payload)
-        self.assertIn("团委副书记", payload)
-        self.assertIn("2025年9月", payload)
-        self.assertIn("2025  年 9 月 1 日", payload)
+        self.assertIn('font-family="Source Han Serif SC"', payload)
+        self.assertIn('x="243.653" y="342.295" font-size="17.474">担</text>', payload)
+        self.assertIn('x="109.218" y="342.270" font-size="17.474">聘</text>', payload)
+        self.assertIn('x="379.762" y="675.729" font-size="14.585">2</text>', payload)
+        self.assertIn('x="115.556" y="380.914"', payload)
+        self.assertIn('font-size="14.585">2</text>', payload)
         self.assertNotIn("蔡欣辰", payload)
 
     def test_leader_certificate_is_pdf_only(self) -> None:
